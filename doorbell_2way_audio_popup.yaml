@@ -1,0 +1,387 @@
+blueprint:
+  name: 2-way audio doorbell popups improved
+  description:
+    Trigger a popup and perform actions when a visitor rings the doorbell
+    with 2-way audio
+  author: victorigualada
+  domain: automation
+  input:
+    doorbell_sensor:
+      name: Doorbell Sensor
+      description: The binary sensor triggered when the doorbell is pressed.
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+          reorder: false
+          multiple: false
+    browser_ids:
+      name: Browser IDs
+      description: List of Browser Mod IDs for displaying the popup.
+      selector:
+        device:
+          multiple: false
+          filter:
+            - integration: browser_mod
+    camera_entity:
+      name: Camera Entity
+      description:
+        The camera to display in the popup. This should be the normal stream
+        produced by the camera.
+      selector:
+        entity:
+          domain:
+            - camera
+          reorder: false
+          multiple: false
+    go2rtc_url:
+      name: 2-way audio go2rtc stream
+      description:
+        The stream exposed by go2rtc that includes 2-way audio. This MUST
+        match the stream name configured in go2rtc
+      default: camera.2way_audio_doorbell
+    open_gate_script:
+      name: Open Gate Script
+      description: The script to open the gate.
+      default:
+      selector:
+        entity:
+          domain:
+            - script
+          reorder: false
+          multiple: false
+    tablet_screensaver_entity:
+      name: Wall Tablet Screensaver Entity (Optional)
+      description: Tablet or Fully Kiosk Browser device that controls the screensaver.
+      default:
+      selector:
+        entity:
+          domain:
+            - switch
+    tablet_screen_entity:
+      name: Wall Tablet Screen Entity (Optional)
+      description: Tablet or Fully Kiosk Browser device that controls the display.
+      default:
+      selector:
+        entity:
+          domain:
+            - light
+    popup_timeout:
+      name: Popup Timeout (seconds)
+      description: Time in seconds before the popup closes automatically. Set to 0 to keep popup open indefinitely.
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 300
+          step: 1
+          unit_of_measurement: seconds
+          mode: slider
+    notification_sound_player:
+      name: Notification Sound Media Player (Optional)
+      description: Media player to play notification sound when doorbell rings.
+      default:
+      selector:
+        entity:
+          domain:
+            - media_player
+    notification_sound_file:
+      name: Notification Sound File
+      description: >
+        Media content ID for the sound file. 
+        To find this: Go to Developer Tools > Services > media_player.play_media,
+        select your media player, browse and select your media file, 
+        then copy the media_content_id value and paste it here.
+        !! It must be mp3.
+        Example: media-source://media_source/local/friendly-doorbell.mp3
+      default: media-source://media_source/local/friendly-doorbell.mp3
+      selector:
+        text:
+    notification_sound_condition:
+      name: Notification Sound Condition Entity (Optional)
+      description: >
+        Optional entity that must be in 'on' or 'true' state to play the notification sound.
+        Leave empty to always play sound (when media player is configured).
+        Examples: input_boolean.doorbell_sound_enabled, binary_sensor.home_occupied
+      default:
+      selector:
+        entity:
+    notification_sound_start_time:
+      name: Notification Sound Start Time (Optional)
+      description: >
+        Start time for notification sound schedule. 
+        Leave empty to disable time-based scheduling.
+      default:
+      selector:
+        time:
+
+    notification_sound_end_time:
+      name: Notification Sound End Time (Optional)
+      description: >
+        End time for notification sound schedule.
+        Leave empty to disable time-based scheduling.
+      default:
+      selector:
+        time:
+
+  # source_url: https://gist.github.com/victorigualada/469b6aa81e77296bbbae339c0a890160
+
+variables:
+  popup_timeout: !input popup_timeout
+  tablet_screen_entity: !input tablet_screen_entity
+  tablet_screensaver_entity: !input tablet_screensaver_entity
+  notification_sound_player: !input notification_sound_player
+  notification_sound_file: !input notification_sound_file
+  notification_sound_condition: !input notification_sound_condition
+  notification_sound_start_time: !input notification_sound_start_time
+  notification_sound_end_time: !input notification_sound_end_time
+
+trigger:
+  - platform: state
+    entity_id: !input doorbell_sensor
+    from: "off"
+    to: "on"
+action:
+  # -------------------------------------------------------------------------- #
+  # Turn on tablet display + disable screensaver (if configured)
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ tablet_screen_entity not in ['', 'none', none] }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: "{{ tablet_screen_entity }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ tablet_screensaver_entity not in ['', 'none', none] }}"
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id: "{{ tablet_screensaver_entity }}"
+  # -------------------------------------------------------------------------- #
+  # Play notification sound if configured
+  - choose:
+      - conditions:
+          # Media player & media file must be configured
+          - condition: template
+            value_template: "{{ notification_sound_player not in ['', 'none', none] and notification_sound_file not in ['', 'none', none] }}"
+          # Time schedule check (if both start and end times are defined)
+          - condition: template
+            value_template: >
+              {% set start = notification_sound_start_time %}
+              {% set end = notification_sound_end_time %}
+              {% if start in ['', 'none', none] or end in ['', 'none', none] %}
+                true
+              {% else %}
+                {% set current_time = now().strftime('%H:%M:%S') %}
+                {% if start <= end %}
+                  {{ start <= current_time <= end }}
+                {% else %}
+                  {{ current_time >= start or current_time <= end }}
+                {% endif %}
+              {% endif %}
+          # Condition entity check (if defined, must be on/true)
+          - condition: template
+            value_template: >
+              {{ notification_sound_condition in ['', 'none', none] or 
+                is_state(notification_sound_condition, 'on') or 
+                is_state(notification_sound_condition, 'true') }}
+        sequence:
+          - service: media_player.play_media
+            target:
+              entity_id: "{{ notification_sound_player }}"
+            data:
+              media:
+                media_content_id: "{{ notification_sound_file }}"
+                media_content_type: "audio/mpeg"
+                metadata:
+                  title: "Doorbell"
+                  thumbnail: null
+                  media_class: music
+                  children_media_class: null
+  # -------------------------------------------------------------------------- #
+  # Broser Mod Popup
+  - service: browser_mod.popup
+    data:
+      tag: doorbell-open
+      size: normal
+      browser_id: !input browser_ids
+      style:
+        "ha-dialog {\n  --mdc-dialog-min-width: 600px !important;\n}\n.content
+        {\n  width: auto !important;\n}"
+      content:
+        type: picture-elements
+        elements:
+          - type: icon
+            style:
+              left: 15%
+              bottom: 0
+              background-color: "#4CAF50"
+              color: white
+              padding: 14px
+              font-size: 18px
+              border: none
+              border-radius: 50px
+              display: inline-flex
+              align-items: center
+              cursor: pointer
+              z-index: 1
+            icon: mdi:phone
+            tap_action:
+              action: call-service
+              service: browser_mod.popup
+              service_data:
+                tag: 2-way-talk
+                size: wide
+                dismissable: true
+                style:
+                  "ha-dialog {\n  --mdc-dialog-min-width: 600px !important;\n}\n.content
+                  {\n  width: auto !important;\n}"
+                browser_id: !input browser_ids
+                content:
+                  type: picture-elements
+                  card_mod:
+                  style: "#root { max-height: 436.65px }
+
+                    "
+                  elements:
+                    - type: icon
+                      icon: mdi:phone-off
+                      tap_action:
+                        action: call-service
+                        service: browser_mod.close_popup
+                        service_data:
+                          all: true
+                      style:
+                        left: 85%
+                        bottom: 0
+                        width: 20px
+                        background-color: "#f44336"
+                        color: white
+                        padding: 14px
+                        font-size: 18px
+                        border: none
+                        border-radius: 50px
+                        display: inline-flex
+                        align-items: center
+                        cursor: pointer
+                        z-index: 1
+                    - type: icon
+                      icon: mdi:lock-open
+                      tap_action:
+                        action: call-service
+                        service: script.turn_on
+                        service_data:
+                          entity_id: !input open_gate_script
+                      style:
+                        left: 15%
+                        bottom: 0
+                        background-color: "#2196F3"
+                        color: white
+                        padding: 14px
+                        font-size: 18px
+                        border: none
+                        border-radius: 50px
+                        display: inline-flex
+                        align-items: center
+                        cursor: pointer
+                        z-index: 1
+                    - type: custom:webrtc-camera
+                      ui: true
+                      url: !input go2rtc_url
+                      media: video,audio,microphone
+                      mode: webrtc
+                      style:
+                        position: absolute
+                        top: 50%
+                        left: 50%
+                        width: 100%
+                        height: 100%
+                      card_mod:
+                        style: ".fullscreen {display: none}
+
+                          .screenshot {display: none}
+
+                          .pictureinpicture {display: none}
+
+                          video {aspect-ratio: 16/9}
+
+                          "
+                  image: https://upload.wikimedia.org/wikipedia/commons/c/ca/1x1.png
+          - type: icon
+            style:
+              left: 85%
+              bottom: 0
+              width: 20px
+              background-color: "#f44336"
+              color: white
+              padding: 14px
+              font-size: 18px
+              border: none
+              border-radius: 50px
+              display: inline-flex
+              align-items: center
+              cursor: pointer
+              z-index: 1
+            icon: mdi:phone-off
+            tap_action:
+              action: call-service
+              service: browser_mod.close_popup
+          - type: icon
+            style:
+              left: 50%
+              bottom: 0
+              background-color: "#2196F3"
+              color: white
+              padding: 14px
+              font-size: 18px
+              border: none
+              border-radius: 50px
+              display: inline-flex
+              align-items: center
+              cursor: pointer
+              z-index: 1
+            icon: mdi:lock-open
+            tap_action:
+              action: call-service
+              service: script.turn_on
+              service_data:
+                entity_id: !input open_gate_script
+          - type: custom:more-info-card
+            entity: !input camera_entity
+            style:
+              position: absolute
+              top: 50%
+              left: 50%
+              width: 100%
+              height: 100%
+              z-index: 0
+            card_mod:
+              style: ":host { padding: 0}
+
+                .card-header { display: none;}
+
+                .card-content { padding: 0; margin-top: 0 }
+
+                "
+        image: https://upload.wikimedia.org/wikipedia/commons/c/ca/1x1.png
+        card_mod:
+          style: "#root { height: 420px }
+
+            "
+  # -------------------------------------------------------------------------- #
+  # Close popup with help of timeout
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ popup_timeout | int > 0 }}"
+        sequence:
+          - delay:
+              seconds: "{{ popup_timeout | int }}"
+          - service: browser_mod.close_popup
+            data:
+              browser_id: !input browser_ids
+              all: true
+mode: single
