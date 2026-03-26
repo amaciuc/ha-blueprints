@@ -1,5 +1,5 @@
 blueprint:
-  name: 2-way audio doorbell popups improved
+  name: 2-way audio doorbell popups
   description:
     Trigger a popup and perform actions when a visitor rings the doorbell
     with 2-way audio
